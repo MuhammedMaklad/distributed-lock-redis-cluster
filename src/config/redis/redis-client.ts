@@ -26,6 +26,7 @@ const dockerNodes: INode[] = [
 ];
 
 const isDocker = process.env.IS_DOCKER === 'true';
+// console.log(isDocker)
 const clusterNodes = isDocker ? dockerNodes : defaultNodes;
 
 const clusterOptions:ClusterOptions ={
@@ -40,10 +41,6 @@ const clusterOptions:ClusterOptions ={
   // Enable pipelining to batch commands sent to the same node
   // This significantly improves throughput
   enableAutoPipelining: true,
-
-  // When in Docker, we might need to handle how Redis announces its IP
-  // but ioredis often handles this automatically if nodes are reachable by hostname
-  dnsLookup: (address, callback) => callback(null, address),
   
   redisOptions: {
     connectTimeout: 10000
@@ -52,6 +49,91 @@ const clusterOptions:ClusterOptions ={
 
 // create cluster instance
 const redisCluster = new Cluster(clusterNodes, clusterOptions);
+
+// --- Helper: Parse Cluster Nodes Info ---
+interface NodeInfo {
+  id: string;
+  ip: string;
+  port: number;
+  role: 'master' | 'slave';
+  masterId: string | null; // If slave, this is the master's ID
+  status: string;
+  slots?: string[]; // Added to store slots for masters
+}
+
+async function getClusterTopology(): Promise<NodeInfo[]> {
+  // We can ask ANY node for the full cluster state
+  // ioredis will pick one automatically
+  const rawInfo = await redisCluster.cluster('NODES') as string;
+
+  return rawInfo.split('\n').filter(line => line.length > 0).map(line => {
+    const parts = line.split(' ');
+    const id = parts[0];
+    const address = parts[1].split('@')[0]; // Remove bus port
+    const lastColonIndex = address.lastIndexOf(':');
+    const ip = address.substring(0, lastColonIndex);
+    const port = address.substring(lastColonIndex + 1);
+    const flags = parts[2]; // e.g., "myself,master" or "slave"
+
+    let role: 'master' | 'slave' = 'master';
+    let masterId: string | null = null;
+
+    if (flags.includes('slave')) {
+      role = 'slave';
+      // Format: id ip:port@cport flags master-id ping-sent pong-recv config-epoch link-state slots...
+      masterId = parts[3] === '-' ? null : parts[3];
+    } else if (flags.includes('master')) {
+      role = 'master';
+    }
+
+    const node: NodeInfo = {
+      id,
+      ip,
+      port: parseInt(port, 10),
+      role,
+      masterId,
+      status: parts[7] // connected/disconnected
+    };
+
+    if (role === 'master') {
+      node.slots = parts.slice(8);
+    }
+
+    return node;
+  });
+}
+
+// --- Helper: Find Which Node Holds a Key ---
+async function getNodeForKey(key: string): Promise<NodeInfo | null> {
+  const topology = await getClusterTopology();
+
+  // 1. Get the slot for the key (ioredis calculation)
+  // We can use the cluster's internal method or a utility, 
+  // but asking Redis is also fine for a helper.
+  const slot = await redisCluster.cluster('KEYSLOT', key) as number;
+
+  // 2. Find which Master owns this slot
+  for (const node of topology) {
+    if (node.role !== 'master' || !node.slots) continue;
+
+    for (const range of node.slots) {
+      if (range.startsWith('[')) continue; // Ignore importing/migrating slots
+      
+      if (range.includes('-')) {
+        const [start, end] = range.split('-').map(Number);
+        if (slot >= start && slot <= end) {
+          return node;
+        }
+      } else {
+        if (parseInt(range, 10) === slot) {
+          return node;
+        }
+      }
+    }
+  }
+
+  return null;
+}
 
 // Event Listeners for Observability
 redisCluster.on('connect', () => {
@@ -77,5 +159,5 @@ process.on('SIGINT', async () => {
   await redisCluster.quit();
   process.exit(0);
 });
-
+export {getClusterTopology, getNodeForKey };
 export default redisCluster;

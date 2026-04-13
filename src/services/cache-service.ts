@@ -74,12 +74,13 @@ export class CacheService {
   /*
     * Example of using Hashes for structured data (More memory efficient)
    */
-  async setUserProfile(userId: string, profile:Record<string, any> | null){
+  async setUserProfile(userId: string, profile: Record<string, any> | null) {
+    if (!profile) return;
     const key = `user:${userId}:profile`;
 
-    // HSET allows updating individual fields without rewriting the whole object
-    await redisCluster.hset(key, JSON.stringify(profile));
-    // Set expiry on the has
+    // HSET in ioredis can take an object to set multiple fields at once
+    await redisCluster.hset(key, profile);
+    // Set expiry on the hash
     await redisCluster.expire(key, 3600);
   }
 

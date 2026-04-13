@@ -84,6 +84,9 @@ services:
     container_name: backend-service
     ports:
       - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
     environment:
       - IS_DOCKER=true
       - PORT=3000
