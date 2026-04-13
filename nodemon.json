@@ -1,0 +1,14 @@
+{
+  "watch": ["src"],
+  "ext": "ts,tsx,json,mts,cts",
+  "ignore": ["src/**/*.spec.ts", "src/**/*.test.ts", "node_modules", "dist"],
+  "exec": "node --import=ts-node/esm --no-warnings src/index.ts",
+  "env": {
+    "NODE_ENV": "development",
+    "TS_NODE_PROJECT": "tsconfig.json",
+    "TS_NODE_TRANSPILE_ONLY": "true"
+  },
+  "delay": 1000,
+  "verbose": true,
+  "signal": "SIGTERM"
+}
